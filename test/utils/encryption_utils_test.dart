@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:test/test.dart';
+import 'package:flutter_test/flutter_test.dart';
 import 'package:fighter_doctors_pdf/utils/encryption_utils.dart';
 
 List<int> _intToBytesBE(int value) =>
@@ -15,14 +15,12 @@ void main() {
       final k2 = EncryptionUtils.generateAESKey();
       expect(k1.length, 32);
       expect(k2.length, 32);
-      // Highly unlikely to be equal if properly random
-      expect(k1, isNot(equals(k2)));
+      expect(k1, isNot(equals(k2))); // very unlikely to match
     });
 
     test('generateIV returns 16 random bytes', () {
       final iv = EncryptionUtils.generateIV();
       expect(iv.length, 16);
-      // Should not be all zeros
       expect(iv.any((b) => b != 0), isTrue);
     });
 
@@ -34,12 +32,6 @@ void main() {
     });
 
     test('verifyEncryptionFile & getEncryptionFileMetadata parse envelope', () async {
-      // Build a fake envelope:
-      // [0..7]: "ENCPDF01"
-      // [8..11]: version (1)
-      // [12..15]: wrappedKeyLength (3)
-      // [16..18]: wrappedKey bytes (0xAA,0xBB,0xCC)
-      // [19]: consumedFlag (1)
       final header = utf8.encode('ENCPDF01');
       final version = _intToBytesBE(1);
       final wrappedKeyLen = _intToBytesBE(3);
@@ -51,7 +43,7 @@ void main() {
         ..addAll(wrappedKeyLen)
         ..addAll(wrappedKey)
         ..addAll(consumed)
-        ..addAll(List<int>.filled(8, 0)); // trailing bytes
+        ..addAll(List<int>.filled(8, 0)); // trailing
 
       final tmp = File('${Directory.systemTemp.path}/enc_test.bin');
       tmp.writeAsBytesSync(Uint8List.fromList(payload));
@@ -65,7 +57,6 @@ void main() {
       expect(meta['consumed'], isTrue);
       expect(meta['fileSize'], payload.length);
 
-      // cleanup
       if (tmp.existsSync()) tmp.deleteSync();
     });
 
