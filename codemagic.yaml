@@ -1,0 +1,186 @@
+# codemagic.yaml
+workflows:
+
+  # ---------------------------
+  # 1) Strict CI (no artifacts)
+  # ---------------------------
+  primary:
+    name: primary
+    max_build_duration: 60
+    instance_type: linux_x2
+    environment:
+      flutter: stable              # or pin to "3.24.3"
+      java: 17                     # AGP 8.x requires JDK 17
+      vars:
+        PROJECT_DIR: "."           # Set to "fighter_doctors_pdf" if your project is in a subfolder
+    cache:
+      cache_paths:
+        - ~/.pub-cache
+        - ~/.gradle/caches
+        - $PROJECT_DIR/.dart_tool
+        - $PROJECT_DIR/build
+    scripts:
+      - name: Print toolchain
+        script: |
+          set -ex
+          flutter --version
+          flutter doctor -v
+          echo "Project dir: $PROJECT_DIR"
+          ls -la $PROJECT_DIR
+
+      - name: Pub get
+        script: |
+          set -ex
+          cd $PROJECT_DIR
+          flutter pub get
+
+      - name: Flutter analyze (strict)
+        script: |
+          set -ex
+          cd $PROJECT_DIR
+          flutter analyze
+
+    artifacts:
+      - $PROJECT_DIR/analysis_options.yaml
+      - $PROJECT_DIR/**/analyzer/**
+
+  # ---------------------------------------
+  # 2) Android Release APK (no signing req)
+  # ---------------------------------------
+  android_apk_release:
+    name: android_apk_release
+    max_build_duration: 60
+    instance_type: linux_x2
+    environment:
+      flutter: stable
+      java: 17
+      vars:
+        PROJECT_DIR: "."
+        # OPTIONAL: Force Gradle wrapper to 8.7 if your repo isn’t already on it.
+        FORCE_GRADLE_87: "true"
+    cache:
+      cache_paths:
+        - ~/.pub-cache
+        - ~/.gradle/caches
+        - $PROJECT_DIR/.dart_tool
+        - $PROJECT_DIR/build
+    scripts:
+      - name: Toolchain sanity
+        script: |
+          set -ex
+          flutter --version
+          java -version
+
+      - name: Pub get
+        script: |
+          set -ex
+          cd $PROJECT_DIR
+          flutter pub get
+
+      - name: (Optional) Normalize Gradle wrapper to 8.7
+        script: |
+          set -ex
+          cd $PROJECT_DIR
+          if [ "$FORCE_GRADLE_87" = "true" ] && [ -f android/gradle/wrapper/gradle-wrapper.properties ]; then
+            sed -i 's#distributionUrl=.*#distributionUrl=https\://services.gradle.org/distributions/gradle-8.7-bin.zip#g' android/gradle/wrapper/gradle-wrapper.properties
+            grep distributionUrl android/gradle/wrapper/gradle-wrapper.properties
+          fi
+
+      - name: Build Android APK (release)
+        script: |
+          set -ex
+          cd $PROJECT_DIR
+          flutter clean
+          flutter build apk --release --dart-define=CI=true
+          ls -la build/app/outputs/flutter-apk
+
+    artifacts:
+      - $PROJECT_DIR/build/app/outputs/flutter-apk/app-release.apk
+
+  # ------------------------------------------------
+  # 3) Android Release AAB (signed, Play‑ready)
+  #    Requires ENV secrets in Codemagic UI:
+  #    - ANDROID_KEYSTORE               (base64 of .jks)
+  #    - ANDROID_KEYSTORE_PASSWORD
+  #    - ANDROID_KEY_ALIAS
+  #    - ANDROID_KEY_PASSWORD
+  # ------------------------------------------------
+  android_aab_release_signed:
+    name: android_aab_release_signed
+    max_build_duration: 60
+    instance_type: linux_x2
+    environment:
+      flutter: stable
+      java: 17
+      vars:
+        PROJECT_DIR: "."
+        KEYSTORE_PATH: "$CM_BUILD_DIR/keystore.jks"
+        # Optional enforcement:
+        FORCE_GRADLE_87: "true"
+    cache:
+      cache_paths:
+        - ~/.pub-cache
+        - ~/.gradle/caches
+        - $PROJECT_DIR/.dart_tool
+        - $PROJECT_DIR/build
+    scripts:
+      - name: Toolchain sanity
+        script: |
+          set -ex
+          flutter --version
+          java -version
+
+      - name: Pub get
+        script: |
+          set -ex
+          cd $PROJECT_DIR
+          flutter pub get
+
+      - name: (Optional) Normalize Gradle wrapper to 8.7
+        script: |
+          set -ex
+          cd $PROJECT_DIR
+          if [ "$FORCE_GRADLE_87" = "true" ] && [ -f android/gradle/wrapper/gradle-wrapper.properties ]; then
+            sed -i 's#distributionUrl=.*#distributionUrl=https\://services.gradle.org/distributions/gradle-8.7-bin.zip#g' android/gradle/wrapper/gradle-wrapper.properties
+            grep distributionUrl android/gradle/wrapper/gradle-wrapper.properties
+          fi
+
+      - name: Decode keystore from ENV and create key.properties
+        script: |
+          set -ex
+          if [ -z "$ANDROID_KEYSTORE" ] || [ -z "$ANDROID_KEYSTORE_PASSWORD" ] || [ -z "$ANDROID_KEY_ALIAS" ] || [ -z "$ANDROID_KEY_PASSWORD" ]; then
+            echo "❌ Missing Android signing envs (ANDROID_KEYSTORE*, ALIAS, PASSWORD). Set them in Codemagic > Environment variables."
+            exit 1
+          fi
+
+          # Decode base64 keystore
+          echo "$ANDROID_KEYSTORE" | base64 --decode > "$KEYSTORE_PATH"
+
+          # Write key.properties for Gradle
+          cat > $PROJECT_DIR/android/key.properties <<EOF
+          storeFile=$KEYSTORE_PATH
+          storePassword=$ANDROID_KEYSTORE_PASSWORD
+          keyAlias=$ANDROID_KEY_ALIAS
+          keyPassword=$ANDROID_KEY_PASSWORD
+          EOF
+
+          echo "Wrote android/key.properties"
+          sed 's/=.*/=***REDACTED***/' $PROJECT_DIR/android/key.properties || true
+
+      - name: Build Android AAB (release, signed)
+        script: |
+          set -ex
+          cd $PROJECT_DIR
+          flutter clean
+          flutter build appbundle --release --dart-define=CI=true
+          ls -la build/app/outputs/bundle/release
+
+    artifacts:
+      - $PROJECT_DIR/build/app/outputs/bundle/release/app-release.aab
+      - $PROJECT_DIR/build/**/mapping.txt
+
+# You can configure webhooks or manual start in Codemagic UI.
+# Typical use:
+#  - Run `primary` on PRs
+#  - Run `android_apk_release` for internal QA (APK)
+#  - Run `android_aab_release_signed` for Play Console uploads
