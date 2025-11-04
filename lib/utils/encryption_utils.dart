@@ -4,14 +4,17 @@ import 'dart:typed_data';
 import 'dart:convert';
 import 'package:crypto/crypto.dart';
 import 'package:asn1lib/asn1lib.dart';
-import 'package:pointycastle/asymmetric/api.dart'; // ✅ Correct import for RSAPublicKey
+import 'package:pointycastle/asymmetric/api.dart'; // RSAPublicKey
 
+/// Encryption utilities for PDF handling.
 class EncryptionUtils {
   static const String _encryptionHeader = 'ENCPDF01';
+  // ignore: unused_field
   static const int _version = 1;
   static const int _keySize = 256; // bits
   static const int _ivSize = 16; // bytes
 
+  /// Generate a random AES key (256-bit).
   static Uint8List generateAESKey() {
     final random = Random.secure();
     return Uint8List.fromList(
@@ -19,6 +22,7 @@ class EncryptionUtils {
     );
   }
 
+  /// Generate a random IV (16 bytes).
   static Uint8List generateIV() {
     final random = Random.secure();
     return Uint8List.fromList(
@@ -26,13 +30,17 @@ class EncryptionUtils {
     );
   }
 
+  /// Validate PEM file format.
   static bool validatePemFile(String pemContent) {
     return pemContent.contains('-----BEGIN PUBLIC KEY-----') &&
         pemContent.contains('-----END PUBLIC KEY-----');
   }
 
+  /// Extract RSA public key from a SubjectPublicKeyInfo PEM.
+  /// Returns null if parsing fails.
   static RSAPublicKey? extractPublicKeyFromPem(String pemContent) {
     try {
+      // Strip header/footer lines and join the Base64 payload.
       final lines = pemContent.split('\n');
       final keyLines = lines
           .where((line) =>
@@ -43,23 +51,31 @@ class EncryptionUtils {
 
       final keyBytes = base64.decode(keyLines);
       final asn1Parser = ASN1Parser(keyBytes);
+
+      // SubjectPublicKeyInfo ::= SEQUENCE { algorithm, subjectPublicKey BIT STRING }
       final topLevelSeq = asn1Parser.nextObject() as ASN1Sequence;
       final publicKeyBitString = topLevelSeq.elements[1] as ASN1BitString;
 
-      // ✅ Fixed: correct getter for ASN1BitString
-      final publicKeyAsn1 = ASN1Parser(publicKeyBitString.valueBytes!).nextObject();
+      // IMPORTANT: use method to get bytes, not a field (fixes analyzer error).
+      final publicKeyAsn1 =
+          ASN1Parser(publicKeyBitString.contentBytes()).nextObject();
       final publicKeySeq = publicKeyAsn1 as ASN1Sequence;
 
       final modulus = publicKeySeq.elements[0] as ASN1Integer;
       final exponent = publicKeySeq.elements[1] as ASN1Integer;
 
-      return RSAPublicKey(modulus.valueAsBigInteger, exponent.valueAsBigInteger);
+      return RSAPublicKey(
+        modulus.valueAsBigInteger,
+        exponent.valueAsBigInteger,
+      );
     } catch (e) {
+      // Keep logs minimal in production; this is helpful during CI.
       print('خطأ في استخراج المفتاح العام: $e');
       return null;
     }
   }
 
+  /// Verify encryption file integrity by checking header.
   static bool verifyEncryptionFile(File encryptedFile) {
     try {
       final bytes = encryptedFile.readAsBytesSync();
@@ -72,15 +88,19 @@ class EncryptionUtils {
     }
   }
 
+  /// Read metadata from the encrypted file envelope.
   static Map<String, dynamic>? getEncryptionFileMetadata(File encryptedFile) {
     try {
       final bytes = encryptedFile.readAsBytesSync();
       if (bytes.length < 20) return null;
+
       final header = String.fromCharCodes(bytes.sublist(0, 8));
       if (header != _encryptionHeader) return null;
+
       final version = _bytesToInt(bytes.sublist(8, 12));
       final wrappedKeyLength = _bytesToInt(bytes.sublist(12, 16));
       final consumedFlag = bytes[16 + wrappedKeyLength];
+
       return {
         'header': header,
         'version': version,
@@ -94,6 +114,7 @@ class EncryptionUtils {
     }
   }
 
+  /// Convert 4 big-endian bytes to int.
   static int _bytesToInt(Uint8List bytes) {
     return ((bytes[0] << 24) |
         (bytes[1] << 16) |
@@ -101,16 +122,18 @@ class EncryptionUtils {
         bytes[3]);
   }
 
+  /// SHA-256 hash of a file for integrity checks.
   static String calculateFileHash(File file) {
     final bytes = file.readAsBytesSync();
     return sha256.convert(bytes).toString();
   }
 
+  /// Basic file checks before encryption.
   static bool validateFileBeforeEncryption(File file) {
     try {
       if (!file.existsSync()) return false;
       if (file.lengthSync() == 0) return false;
-      if (file.lengthSync() > 500 * 1024 * 1024) return false;
+      if (file.lengthSync() > 500 * 1024 * 1024) return false; // 500MB
       return true;
     } catch (e) {
       print('خطأ في التحقق من الملف: $e');
